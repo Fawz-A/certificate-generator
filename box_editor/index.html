@@ -10,14 +10,15 @@
   .box::before { content: ""; position: absolute; inset: -6px; }  /* easier to grab small boxes */
   .box.active { border: 2px solid #ff2d55; z-index: 2; }
   .box img { position: absolute; left: 0; top: -50%; width: 100%; height: 200%; pointer-events: none; }
-  .lbl { position: absolute; left: -2px; top: -19px; font-size: 11px; line-height: 17px; padding: 0 5px;
+  .lbl { position: absolute; left: 10px; top: -19px; font-size: 11px; line-height: 17px; padding: 0 5px;
          background: #9aa0a6; color: #fff; border-radius: 3px 3px 0 0; white-space: nowrap; pointer-events: none; }
   .active .lbl { background: #ff2d55; }
-  .h { position: absolute; width: 14px; height: 14px; background: #fff; border: 2px solid #ff2d55;
+  /* Corner handles sit just outside the box so they never cover the text. */
+  .h { position: absolute; width: 11px; height: 11px; background: #fff; border: 2px solid #ff2d55;
        box-sizing: border-box; border-radius: 3px; }
   .box:not(.active) .h { display: none; }
-  .nw { left: -8px; top: -8px; cursor: nwse-resize; }   .ne { right: -8px; top: -8px; cursor: nesw-resize; }
-  .sw { left: -8px; bottom: -8px; cursor: nesw-resize; } .se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+  .nw { left: -12px; top: -12px; cursor: nwse-resize; }   .ne { right: -12px; top: -12px; cursor: nesw-resize; }
+  .sw { left: -12px; bottom: -12px; cursor: nesw-resize; } .se { right: -12px; bottom: -12px; cursor: nwse-resize; }
   #status { position: absolute; right: 8px; bottom: 8px; font-size: 12px; background: rgba(0,0,0,.65);
             color: #fff; padding: 3px 8px; border-radius: 4px; display: none; z-index: 5; }
 </style>

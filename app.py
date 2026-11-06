@@ -296,6 +296,11 @@ with right:
                      format_func=lambda k: f"{labels[k]}: {names[samples[k]] if names else 'Your Name Here'}")
     idx = samples[which]
     items = items_for(idx, names[idx] if names else "Your Name Here")
+    if dynamic_ref:
+        # Show the last (longest) number so the box is sized for the widest one.
+        sample_ref = ref_for(max(n_certs, 1) - 1)
+        items[-1] = (sample_ref, styles["ref"])
+        st.caption(f"Reference box shows a sample number: **{sample_ref}** (the last one, so you can size for the widest).")
 
     field_ids = ["name"] + (["date"] if use_date else []) + (["ref"] if use_ref else [])
     scale = min(1.0, PREVIEW_W / W)
