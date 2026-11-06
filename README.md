@@ -4,10 +4,10 @@ Fill hundreds of names onto a certificate template in one go — no more copy-pa
 
 ## How it works
 
-1. **Names** — upload an Excel (`.xlsx`) or CSV file and pick the column with the names, or type them one per line.
+1. **Names** — upload an Excel (`.xlsx`), CSV, or a PDF containing a table, or type names one per line. The name column is found automatically from its heading (Name, Full Name, Candidate Name, Participant Name, Name of the Student …); headings like Institution Name or Father's Name are skipped. Entries that don't look like names (emails, digits) are flagged.
 2. **Template** — upload the certificate as JPEG, PNG or PDF.
 3. **Place the name** — click on the preview where the name should go, then fine-tune with the sliders. Pick a font (9 bundled, or upload your own `.ttf` / `.otf`), weight, colour, alignment and letter case. Preview with the longest name to check it fits; names too long for the box shrink automatically.
-4. **Generate** — choose PDF, JPEG or PNG and press **Generate**. Download everything as one ZIP. When running locally, the files are also saved in `output/`.
+4. **Generate** — choose PDF, JPEG or PNG and press **Generate**. Each file is named after the person (`Asha Rao.pdf`; a repeated name becomes `Asha Rao (2).pdf`). Download everything as one ZIP. When running locally, the files are also saved in `output/`.
 
 Handles 1000 certificates in under a minute.
 

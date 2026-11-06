@@ -32,6 +32,89 @@ def font_weights(font_path: str | Path) -> list[str]:
         return []
 
 
+# ------------------------------------------------------------------ name lists
+
+# Headings that mean "the person's name": Name, Full Name, Candidate Name,
+# Participant's Name, Name of the Student, Delegate Name ...
+_PERSON = r"(full|candidate|participant|student|delegate|attendee|recipient|awardee|member|employee|person|winner|volunteer)"
+_NAME_HEADER = re.compile(
+    rf"^\s*({_PERSON}\s*'?s?\s*)?(full\s*)?name\s*$"
+    rf"|^\s*name\s+of\s+(the\s+)?{_PERSON}\s*$",
+    re.I,
+)
+# "name" headings that are about something else.
+_NOT_PERSON = re.compile(
+    r"father|mother|guardian|parent|spouse|husband|wife|institut|college|school|universit"
+    r"|company|organi[sz]ation|file|user|team|event|country|course|project|program|e-?mail|guide|mentor",
+    re.I,
+)
+# Things that don't belong in a person's name: digits, emails, underscores, odd symbols.
+_NOT_A_NAME = re.compile(r"[\d@_#/\\|<>{}\[\]=+*&%$!?;:]")
+
+
+def looks_like_name(value: str) -> bool:
+    v = value.strip()
+    return bool(re.search(r"[^\W\d_]", v)) and not _NOT_A_NAME.search(v)
+
+
+def find_name_column(df) -> str | None:
+    """Pick the column holding people's names, by heading first, then by content."""
+    cols = [str(c) for c in df.columns]
+
+    def header_score(c: str) -> int:
+        if _NAME_HEADER.match(c) and not _NOT_PERSON.search(c):
+            return 3
+        if re.search(r"\bname\b", c, re.I) and not _NOT_PERSON.search(c):
+            return 2
+        if re.fullmatch(rf"\s*{_PERSON}s?\s*", c, re.I):
+            return 1
+        return 0
+
+    scored = sorted(((header_score(c), -i, c) for i, c in enumerate(cols)), reverse=True)
+    if scored and scored[0][0] > 0:
+        return scored[0][2]
+
+    # No helpful heading: the column whose values most look like names.
+    def content_score(c: str) -> float:
+        vals = [str(v).strip() for v in df[c].dropna() if str(v).strip()][:200]
+        return sum(looks_like_name(v) and " " in v for v in vals) / len(vals) if vals else 0
+
+    best = max(cols, key=content_score, default=None)
+    return best if best is not None and content_score(best) > 0.3 else None
+
+
+def read_pdf_table(data: bytes):
+    """Read the table(s) in a PDF into a DataFrame. The first row is the header.
+
+    Rows that a page break split in two (blank first cell, mostly empty) are
+    joined back onto the row above.
+    """
+    import pandas as pd
+
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    rows: list[list[str]] = []
+    for page in doc:
+        for table in page.find_tables().tables:
+            for r in table.rows:
+                # Clip text per cell: table.extract() drops the spaces in this kind of PDF.
+                rows.append([" ".join(page.get_text("text", clip=c).split()) if c else "" for c in r.cells])
+    if not rows:
+        return pd.DataFrame()
+
+    header, body = rows[0], []
+    for row in rows[1:]:
+        row = (row + [""] * len(header))[: len(header)]
+        if row == header:  # header repeated on a later page
+            continue
+        filled = sum(bool(c) for c in row)
+        if body and not row[0] and filled <= len(row) / 2:
+            body[-1] = [f"{a} {b}".strip() for a, b in zip(body[-1], row)]
+        else:
+            body.append(row)
+    cols = [h or f"Column {i + 1}" for i, h in enumerate(header)]
+    return pd.DataFrame(body, columns=cols)
+
+
 def load_template(data: bytes, filename: str, pdf_dpi: int = 200) -> tuple[Image.Image, int]:
     """Return (RGB image, dpi). PDFs are rendered from their first page."""
     if filename.lower().endswith(".pdf"):
@@ -107,8 +190,10 @@ def draw_name(template: Image.Image, name: str, style: TextStyle, outline: bool 
 
 
 def safe_filename(name: str) -> str:
-    s = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", name).strip().strip(".")
-    return re.sub(r"\s+", "_", s)[:80] or "certificate"
+    """The person's name as a file name: only characters Windows/macOS forbid are removed."""
+    s = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", name)
+    s = re.sub(r"\s+", " ", s).strip().strip(".")
+    return s[:120] or "certificate"
 
 
 def _save(img: Image.Image, path: Path, fmt: str, dpi: int):
@@ -137,16 +222,16 @@ def generate(names, template, style, out_dir: Path, fmt="PDF", dpi=300, progress
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = {"PDF": "pdf", "JPEG": "jpg", "PNG": "png"}[fmt]
-    width = max(3, len(str(len(names))))
-
+    # File name = the person's name. Same name twice -> "Garima (2)".
+    # Compared case-insensitively because macOS/Windows treat "garima" and "Garima" as one file.
     seen: dict[str, int] = {}
     jobs = []
-    for i, name in enumerate(names, 1):
+    for name in names:
         base = safe_filename(name)
-        seen[base] = seen.get(base, 0) + 1
-        if seen[base] > 1:
-            base = f"{base}_{seen[base]}"
-        jobs.append((name, out_dir / f"{i:0{width}d}_{base}.{ext}"))
+        n = seen[base.lower()] = seen.get(base.lower(), 0) + 1
+        if n > 1:
+            base = f"{base} ({n})"
+        jobs.append((name, out_dir / f"{base}.{ext}"))
 
     def work(job):
         name, path = job

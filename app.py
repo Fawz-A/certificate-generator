@@ -48,6 +48,11 @@ def cached_template(data: bytes, filename: str, dpi: int):
     return certgen.load_template(data, filename, dpi)
 
 
+@st.cache_data(show_spinner=False)
+def cached_pdf_table(data: bytes):
+    return certgen.read_pdf_table(data)
+
+
 def clean(values) -> list[str]:
     out = []
     for v in values:
@@ -61,28 +66,46 @@ def clean(values) -> list[str]:
 
 # ---------------------------------------------------------------- 1. names
 st.header("1 · Names")
-tab_file, tab_type = st.tabs(["Upload Excel / CSV", "Type names"])
+tab_file, tab_type = st.tabs(["Upload Excel / CSV / PDF", "Type names"])
 names: list[str] = []
 
 with tab_file:
-    sheet = st.file_uploader("Excel (.xlsx) or CSV file", type=["xlsx", "csv"])
+    sheet = st.file_uploader("Excel (.xlsx), CSV, or a PDF with a table of names", type=["xlsx", "csv", "pdf"])
     if sheet:
-        has_header = st.checkbox("First row is a header", value=True)
-        hdr = 0 if has_header else None
+        is_pdf = sheet.name.lower().endswith(".pdf")
+        hdr = 0
+        if not is_pdf:
+            hdr = 0 if st.checkbox("First row is a header", value=True) else None
         try:
-            if sheet.name.lower().endswith(".csv"):
+            if is_pdf:
+                with st.spinner("Reading the table from the PDF…"):
+                    df = cached_pdf_table(sheet.getvalue())
+            elif sheet.name.lower().endswith(".csv"):
                 df = pd.read_csv(sheet, header=hdr)
             else:
                 df = pd.read_excel(sheet, header=hdr)
         except Exception as e:
             st.error(f"Couldn't read that file: {e}")
             df = None
-        if df is not None and not df.empty:
+        if df is not None and df.empty:
+            st.error("No table found in that file.")
+        elif df is not None:
             cols = [str(c) for c in df.columns]
             df.columns = cols
-            guess = next((i for i, c in enumerate(cols) if "name" in c.lower()), 0)
-            col = st.selectbox("Column with the names", cols, index=guess)
+            found = certgen.find_name_column(df)
+            col = st.selectbox(
+                "Column with the names", cols, index=cols.index(found) if found else 0,
+                help="Picked automatically from headings like Name, Full Name, Candidate Name, Participant Name.",
+            )
+            if found:
+                st.caption(f"Detected the name column: **{found}**")
+            else:
+                st.warning("Couldn't spot a name column. Please choose it above.")
             names = clean(df[col])
+            odd = [n for n in names if not certgen.looks_like_name(n)]
+            if odd:
+                with st.expander(f"⚠️ {len(odd)} entries don't look like names. Check them before generating"):
+                    st.write(odd)
 
 with tab_type:
     typed = st.text_area("One name per line", height=180, placeholder="Asha Rao\nRahul Mehta\n…")
