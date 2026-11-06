@@ -133,11 +133,11 @@ class TextStyle:
     weight: str | None   # variable-font weight name, e.g. "Bold"
     size: int            # font size in template pixels
     color: str           # "#rrggbb"
-    x: float             # box centre, fraction of image width
+    x: float             # anchor (left edge / centre / right edge, per align), fraction of width
     y: float             # box centre, fraction of image height
     box_w: float         # box width, fraction of image width
     align: str           # "left" | "center" | "right"
-    case: str            # "As typed" | "UPPERCASE" | "Title Case"
+    case: str = "As typed"  # "As typed" | "UPPERCASE" | "Title Case"
 
 
 def _font(style: TextStyle, size: int) -> ImageFont.FreeTypeFont:
@@ -159,34 +159,47 @@ def apply_case(name: str, case: str) -> str:
 
 
 def box_rect(img_size: tuple[int, int], style: TextStyle) -> tuple[int, int, int, int]:
+    """The text box. (x, y) is where the text is anchored: its left edge, centre or
+    right edge depending on the alignment, so a click puts the text where you clicked."""
     W, H = img_size
     bw, bh = style.box_w * W, style.size * 1.4
-    cx, cy = style.x * W, style.y * H
-    return int(cx - bw / 2), int(cy - bh / 2), int(cx + bw / 2), int(cy + bh / 2)
+    ax, cy = style.x * W, style.y * H
+    left = {"left": ax, "right": ax - bw}.get(style.align, ax - bw / 2)
+    return int(left), int(cy - bh / 2), int(left + bw), int(cy + bh / 2)
 
 
-def draw_name(template: Image.Image, name: str, style: TextStyle, outline: bool = False) -> Image.Image:
-    """Draw one name onto a copy of the template. Long names shrink to fit the box."""
-    img = template.copy()
-    d = ImageDraw.Draw(img)
-    text = apply_case(name, style.case)
-    left, top, right, bottom = box_rect(img.size, style)
-    max_w = right - left
-
+def _draw_text(d: ImageDraw.ImageDraw, size_wh, text: str, style: TextStyle):
+    """Draw one piece of text in its box. Text wider than the box shrinks to fit."""
+    text = apply_case(text, style.case)
+    left, top, right, bottom = box_rect(size_wh, style)
     size = style.size
     font = _font(style, size)
-    while size > 8 and d.textlength(text, font=font) > max_w:
+    while size > 8 and d.textlength(text, font=font) > right - left:
         size = int(size * 0.95)
         font = _font(style, size)
-
     cy = (top + bottom) / 2
     x, anchor = {"left": (left, "lm"), "right": (right, "rm")}.get(style.align, ((left + right) / 2, "mm"))
     d.text((x, cy), text, font=font, fill=style.color, anchor=anchor)
 
+
+def draw_certificate(template: Image.Image, items, outline: bool = False, active: int = 0) -> Image.Image:
+    """Draw every (text, style) in items onto a copy of the template.
+
+    With outline=True each text box is outlined: the active one red, the others grey.
+    """
+    img = template.copy()
+    d = ImageDraw.Draw(img)
+    for text, style in items:
+        _draw_text(d, img.size, text, style)
     if outline:
         lw = max(2, img.width // 500)
-        d.rectangle((left, top, right, bottom), outline="#ff2d55", width=lw)
+        for i, (_, style) in enumerate(items):
+            d.rectangle(box_rect(img.size, style), outline="#ff2d55" if i == active else "#9aa0a6", width=lw)
     return img
+
+
+def draw_name(template: Image.Image, name: str, style: TextStyle, outline: bool = False) -> Image.Image:
+    return draw_certificate(template, [(name, style)], outline=outline)
 
 
 def safe_filename(name: str) -> str:
@@ -212,8 +225,11 @@ def _save(img: Image.Image, path: Path, fmt: str, dpi: int):
     doc.close()
 
 
-def generate(names, template, style, out_dir: Path, fmt="PDF", dpi=300, progress=None, workers=4):
+def generate(names, template, style, out_dir: Path, fmt="PDF", dpi=300, progress=None, workers=4, extras=()):
     """Render every certificate into out_dir and return the list of files written.
+
+    extras: other fields as (style, texts), with texts[i] going on certificate i
+    (e.g. the date repeated, or a running reference number).
 
     Files are written straight to disk as they are made, so memory use stays flat
     whether there are 10 names or 1000.
@@ -229,11 +245,12 @@ def generate(names, template, style, out_dir: Path, fmt="PDF", dpi=300, progress
         seen[base] = seen.get(base, 0) + 1
         if seen[base] > 1:
             base = f"{base}_{seen[base]}"
-        jobs.append((name, out_dir / f"{i:0{width}d}_{base}.{ext}"))
+        items = [(name, style)] + [(texts[i - 1], st) for st, texts in extras]
+        jobs.append((items, out_dir / f"{i:0{width}d}_{base}.{ext}"))
 
     def work(job):
-        name, path = job
-        _save(draw_name(template, name, style), path, fmt, dpi)
+        items, path = job
+        _save(draw_certificate(template, items), path, fmt, dpi)
         return path
 
     done = []
