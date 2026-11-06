@@ -190,10 +190,8 @@ def draw_name(template: Image.Image, name: str, style: TextStyle, outline: bool 
 
 
 def safe_filename(name: str) -> str:
-    """The person's name as a file name: only characters Windows/macOS forbid are removed."""
-    s = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", name)
-    s = re.sub(r"\s+", " ", s).strip().strip(".")
-    return s[:120] or "certificate"
+    s = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", name).strip().strip(".")
+    return re.sub(r"\s+", "_", s)[:80] or "certificate"
 
 
 def _save(img: Image.Image, path: Path, fmt: str, dpi: int):
@@ -222,16 +220,16 @@ def generate(names, template, style, out_dir: Path, fmt="PDF", dpi=300, progress
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = {"PDF": "pdf", "JPEG": "jpg", "PNG": "png"}[fmt]
-    # File name = the person's name. Same name twice -> "Garima (2)".
-    # Compared case-insensitively because macOS/Windows treat "garima" and "Garima" as one file.
+    width = max(3, len(str(len(names))))
+
     seen: dict[str, int] = {}
     jobs = []
-    for name in names:
+    for i, name in enumerate(names, 1):
         base = safe_filename(name)
-        n = seen[base.lower()] = seen.get(base.lower(), 0) + 1
-        if n > 1:
-            base = f"{base} ({n})"
-        jobs.append((name, out_dir / f"{base}.{ext}"))
+        seen[base] = seen.get(base, 0) + 1
+        if seen[base] > 1:
+            base = f"{base}_{seen[base]}"
+        jobs.append((name, out_dir / f"{i:0{width}d}_{base}.{ext}"))
 
     def work(job):
         name, path = job
