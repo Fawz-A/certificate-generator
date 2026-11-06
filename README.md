@@ -1,0 +1,30 @@
+# Certificate Generator
+
+Fill hundreds of names onto a certificate template in one go — no more copy-pasting each name by hand.
+
+## How it works
+
+1. **Names** — upload an Excel (`.xlsx`) or CSV file and pick the column with the names, or type them one per line.
+2. **Template** — upload the certificate as JPEG, PNG or PDF.
+3. **Place the name** — click on the preview where the name should go, then fine-tune with the sliders. Pick a font (9 bundled, or upload your own `.ttf` / `.otf`), weight, colour, alignment and letter case. Preview with the longest name to check it fits; names too long for the box shrink automatically.
+4. **Generate** — choose PDF, JPEG or PNG and press **Generate**. Download everything as one ZIP. When running locally, the files are also saved in `output/`.
+
+Handles 1000 certificates in under a minute.
+
+## Run locally
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/streamlit run app.py
+```
+
+Try it with the files in `sample/` (a template and 1000 test names).
+
+## Deploy
+
+Deploy on [Streamlit Community Cloud](https://share.streamlit.io) with `app.py` as the main file. No secrets needed. On the cloud, files saved to `output/` are temporary, so use the ZIP download.
+
+## Fonts
+
+Bundled fonts are from [Google Fonts](https://fonts.google.com) under the SIL Open Font License (see `fonts/OFL.txt`).
