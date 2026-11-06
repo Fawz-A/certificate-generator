@@ -1,3 +1,4 @@
+import base64
 import hmac
 import io
 import tempfile
@@ -6,9 +7,13 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from streamlit_image_coordinates import streamlit_image_coordinates
+import streamlit.components.v1 as components
 
 import certgen
+
+# Drag/resize editor (box_editor/index.html). It only reports back after the boxes
+# have been still for 1 second, so dragging never waits on the server.
+box_editor = components.declare_component("box_editor", path=str(Path(__file__).parent / "box_editor"))
 
 st.set_page_config(page_title="Certificate Generator", page_icon="🎓", layout="wide")
 
@@ -40,7 +45,7 @@ st.title("🎓 Certificate Generator")
 st.caption("Names in, certificates out. Upload a list and a template, place the name once, generate them all.")
 
 OUTPUT_ROOT = Path(__file__).parent / "output"
-PREVIEW_W = 900  # px the preview is shown at
+PREVIEW_W = 1000  # px wide the editor's template image is sent at
 
 
 @st.cache_data(show_spinner=False)
@@ -137,29 +142,51 @@ st.caption(f"Template: {W} × {H} px")
 
 FIELDS = {"name": "Name", "date": "Issue date", "ref": "Reference no."}
 DEFAULTS = {  # x, y, box width (%), font size (fraction of height), align
-    "name": (50.0, 50.0, 60, 0.06, "center"),
-    "date": (80.0, 30.0, 18, 0.022, "left"),
-    "ref": (90.0, 34.0, 10, 0.022, "left"),
+    "name": (50.0, 50.0, 60.0, 0.06, "center"),
+    "date": (80.0, 30.0, 18.0, 0.022, "left"),
+    "ref": (90.0, 34.0, 10.0, 0.022, "left"),
 }
 
 # Reset the layout whenever a different template is uploaded.
 tpl_id = (tpl_file.name, tpl_file.size, pdf_dpi)
 if st.session_state.get("tpl_id") != tpl_id:
     st.session_state.tpl_id = tpl_id
-    st.session_state.last_click = None
     for fid, (x, y, w, size, align) in DEFAULTS.items():
         st.session_state.update({
             f"{fid}_x": x, f"{fid}_y": y, f"{fid}_w": w,
             f"{fid}_size": max(8, int(H * size)), f"{fid}_align": align,
         })
 
-# A click on the preview moves the selected field. Apply it before the sliders are drawn.
-click = st.session_state.get("preview_click")
-if click and click != st.session_state.get("last_click"):
-    st.session_state.last_click = click
-    fid = st.session_state.get("click_target", "name")
-    st.session_state[f"{fid}_x"] = round(click["x"] / click["width"] * 100, 1)
-    st.session_state[f"{fid}_y"] = round(click["y"] / click["height"] * 100, 1)
+MAX_SIZE = max(200, H // 4)
+
+# Boxes moved/resized in the editor: turn them back into slider values before the
+# sliders are drawn. Each report carries a sequence number so it is applied once.
+moved = st.session_state.get("box_editor")
+if moved and moved.get("seq", 0) > st.session_state.get("box_seq", 0):
+    st.session_state.box_seq = moved["seq"]
+    for fid, r in moved["rects"].items():
+        align = st.session_state.get(f"{fid}_align", DEFAULTS[fid][4])
+        anchor = {"left": r["left"], "right": r["left"] + r["w"]}.get(align, r["left"] + r["w"] / 2)
+        st.session_state[f"{fid}_x"] = round(min(100.0, max(0.0, anchor * 100)), 1)
+        st.session_state[f"{fid}_y"] = round(min(100.0, max(0.0, (r["top"] + r["h"] / 2) * 100)), 1)
+        st.session_state[f"{fid}_w"] = round(min(100.0, max(1.0, r["w"] * 100)), 1)
+        st.session_state[f"{fid}_size"] = int(min(MAX_SIZE, max(8, round(r["h"] * H / 1.4))))
+
+
+def data_url(img, fmt: str) -> str:
+    buf = io.BytesIO()
+    img.save(buf, fmt, **({"quality": 85} if fmt == "JPEG" else {}))
+    return f"data:image/{fmt.lower()};base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def preview_background() -> str:
+    """The template, scaled for the editor. Encoded once per template."""
+    if st.session_state.get("bg_for") != tpl_id:
+        small = template.copy()
+        small.thumbnail((PREVIEW_W, PREVIEW_W * 4))
+        st.session_state.bg_url = data_url(small, "JPEG")
+        st.session_state.bg_for = tpl_id
+    return st.session_state.bg_url
 
 
 def style_controls(fid: str, fonts: dict, default_font: str) -> certgen.TextStyle:
@@ -178,10 +205,10 @@ def style_controls(fid: str, fonts: dict, default_font: str) -> certgen.TextStyl
     case = "As typed"
     if fid == "name":
         case = st.selectbox("Letter case", ["As typed", "Title Case", "UPPERCASE"], key="name_case")
-    st.slider("Font size (px)", 8, max(200, H // 4), key=f"{fid}_size")
+    st.slider("Font size (px)", 8, MAX_SIZE, key=f"{fid}_size")
     st.slider("Horizontal position (%)", 0.0, 100.0, step=0.1, key=f"{fid}_x")
     st.slider("Vertical position (%)", 0.0, 100.0, step=0.1, key=f"{fid}_y")
-    st.slider("Text box width (%)", 2, 100, key=f"{fid}_w",
+    st.slider("Text box width (%)", 1.0, 100.0, step=0.5, key=f"{fid}_w",
               help="Text longer than the box shrinks automatically to fit.")
     ss = st.session_state
     return certgen.TextStyle(
@@ -270,16 +297,20 @@ with right:
     idx = samples[which]
     items = items_for(idx, names[idx] if names else "Your Name Here")
 
-    targets = ["name"] + (["date"] if use_date else []) + (["ref"] if use_ref else [])
-    if st.session_state.get("click_target") not in targets:
-        st.session_state.click_target = "name"
-    target = st.radio("👆 Clicking the certificate moves", targets, key="click_target",
-                      format_func=FIELDS.get, horizontal=True)
-    preview = certgen.draw_certificate(template, items, outline=True, active=targets.index(target))
-    preview.thumbnail((PREVIEW_W, PREVIEW_W * 4))
-    st.caption("The red box is the field you're moving; grey boxes are the others.")
-    streamlit_image_coordinates(preview, key="preview_click", width="stretch",
-                                image_format="JPEG", jpeg_quality=85, cursor="crosshair")
+    field_ids = ["name"] + (["date"] if use_date else []) + (["ref"] if use_ref else [])
+    scale = min(1.0, PREVIEW_W / W)
+    fields = []
+    for fid, (text, style) in zip(field_ids, items):
+        l, t, r, b = certgen.box_rect((W, H), style)
+        fields.append({
+            "id": fid, "label": FIELDS[fid],
+            "rect": {"left": l / W, "top": t / H, "w": (r - l) / W, "h": (b - t) / H},
+            "sprite": data_url(certgen.text_sprite((W, H), text, style, scale), "PNG"),
+        })
+    st.caption("✋ Drag a box to move it, drag a corner to resize it (height sets the font size). "
+               "Arrow keys nudge the selected box. Changes apply 1 second after you let go.")
+    box_editor(image=preview_background(), fields=fields, seq=st.session_state.get("box_seq", 0),
+               key="box_editor", default=None)
 
 # ---------------------------------------------------------------- 4. generate
 st.header("4 · Generate")

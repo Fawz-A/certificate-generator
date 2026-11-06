@@ -4,7 +4,7 @@ import io
 import re
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pymupdf
@@ -180,6 +180,19 @@ def _draw_text(d: ImageDraw.ImageDraw, size_wh, text: str, style: TextStyle):
     cy = (top + bottom) / 2
     x, anchor = {"left": (left, "lm"), "right": (right, "rm")}.get(style.align, ((left + right) / 2, "mm"))
     d.text((x, cy), text, font=font, fill=style.color, anchor=anchor)
+
+
+def text_sprite(img_size: tuple[int, int], text: str, style: TextStyle, scale: float = 1.0) -> Image.Image:
+    """Just this field's text on a transparent background, sized to its box (plus
+    half a box of headroom above and below for tall script letters), for the editor."""
+    left, top, right, bottom = box_rect(img_size, style)
+    bw, bh = max(1, right - left), max(1, bottom - top)
+    layer = Image.new("RGBA", (bw, bh * 2), (0, 0, 0, 0))
+    local = replace(style, x={"left": 0.0, "right": 1.0}.get(style.align, 0.5), y=0.5, box_w=1.0)
+    _draw_text(ImageDraw.Draw(layer), layer.size, text, local)
+    if scale != 1.0:
+        layer = layer.resize((max(1, round(bw * scale)), max(1, round(bh * 2 * scale))), Image.LANCZOS)
+    return layer
 
 
 def draw_certificate(template: Image.Image, items, outline: bool = False, active: int = 0) -> Image.Image:

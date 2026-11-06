@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; font-family: system-ui, sans-serif; user-select: none; }
+  #wrap { position: relative; width: 100%; touch-action: none; margin-top: 20px; }
+  #bg { display: block; width: 100%; height: auto; pointer-events: none; }
+  .box { position: absolute; box-sizing: border-box; border: 2px dashed #9aa0a6; cursor: move; }
+  .box::before { content: ""; position: absolute; inset: -6px; }  /* easier to grab small boxes */
+  .box.active { border: 2px solid #ff2d55; z-index: 2; }
+  .box img { position: absolute; left: 0; top: -50%; width: 100%; height: 200%; pointer-events: none; }
+  .lbl { position: absolute; left: -2px; top: -19px; font-size: 11px; line-height: 17px; padding: 0 5px;
+         background: #9aa0a6; color: #fff; border-radius: 3px 3px 0 0; white-space: nowrap; pointer-events: none; }
+  .active .lbl { background: #ff2d55; }
+  .h { position: absolute; width: 14px; height: 14px; background: #fff; border: 2px solid #ff2d55;
+       box-sizing: border-box; border-radius: 3px; }
+  .box:not(.active) .h { display: none; }
+  .nw { left: -8px; top: -8px; cursor: nwse-resize; }   .ne { right: -8px; top: -8px; cursor: nesw-resize; }
+  .sw { left: -8px; bottom: -8px; cursor: nesw-resize; } .se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+  #status { position: absolute; right: 8px; bottom: 8px; font-size: 12px; background: rgba(0,0,0,.65);
+            color: #fff; padding: 3px 8px; border-radius: 4px; display: none; z-index: 5; }
+</style>
+</head>
+<body>
+<div id="wrap"><img id="bg" alt=""><div id="status"></div></div>
+<script>
+// Drag/resize text boxes over the certificate. Everything moves locally in the browser;
+// positions go back to Python only once the boxes have been left alone for 1 second.
+const DEBOUNCE_MS = 1000;
+const send = (type, data) => parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), "*");
+
+const wrap = document.getElementById("wrap"), bg = document.getElementById("bg"), status = document.getElementById("status");
+const boxes = {};           // id -> { el, sprite, label, r: {left, top, w, h} as fractions of the image }
+let active = null, drag = null, timer = null, seq = 0, sentSeq = 0, imgSrc = null;
+
+const setHeight = () => send("streamlit:setFrameHeight", { height: Math.ceil(wrap.getBoundingClientRect().height) + 24 });
+bg.addEventListener("load", setHeight);
+new ResizeObserver(setHeight).observe(wrap);
+
+function showStatus(text) { status.textContent = text; status.style.display = text ? "block" : "none"; }
+const waiting = () => drag !== null || timer !== null;
+
+function place(b) {
+  Object.assign(b.el.style, {
+    left: b.r.left * 100 + "%", top: b.r.top * 100 + "%", width: b.r.w * 100 + "%", height: b.r.h * 100 + "%",
+  });
+}
+
+function markActive() {
+  for (const id in boxes) boxes[id].el.classList.toggle("active", id === active);
+}
+
+function makeBox(id) {
+  const el = document.createElement("div");
+  el.className = "box";
+  const sprite = document.createElement("img");
+  const label = document.createElement("div");
+  label.className = "lbl";
+  el.append(sprite, label);
+  for (const c of ["nw", "ne", "sw", "se"]) {
+    const h = document.createElement("div");
+    h.className = "h " + c;
+    h.dataset.corner = c;
+    el.append(h);
+  }
+  el.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    active = id; markActive();
+    clearTimeout(timer); timer = null;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    drag = { id, mode: e.target.dataset.corner || "move", x0: e.clientX, y0: e.clientY, W, H, r0: { ...boxes[id].r } };
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (!drag || drag.id !== id) return;
+    const dx = (e.clientX - drag.x0) / drag.W, dy = (e.clientY - drag.y0) / drag.H;
+    const r = { ...drag.r0 }, minW = 0.02, minH = 0.012;
+    if (drag.mode === "move") { r.left += dx; r.top += dy; }
+    else {
+      if (drag.mode.includes("e")) r.w = Math.max(minW, r.w + dx);
+      if (drag.mode.includes("s")) r.h = Math.max(minH, r.h + dy);
+      if (drag.mode.includes("w")) { const w = Math.max(minW, r.w - dx); r.left += r.w - w; r.w = w; }
+      if (drag.mode.includes("n")) { const h = Math.max(minH, r.h - dy); r.top += r.h - h; r.h = h; }
+    }
+    boxes[id].r = r; place(boxes[id]);
+  });
+  const end = () => { if (drag && drag.id === id) { drag = null; schedule(); } };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+  wrap.append(el);
+  return { el, sprite, label, r: { left: 0, top: 0, w: 0.1, h: 0.05 } };
+}
+
+// Arrow keys nudge the selected box (Shift = 10×).
+document.addEventListener("keydown", (e) => {
+  if (!active || !boxes[active] || !e.key.startsWith("Arrow")) return;
+  e.preventDefault();
+  const step = (e.shiftKey ? 10 : 1), r = boxes[active].r;
+  if (e.key === "ArrowLeft") r.left -= step / wrap.clientWidth;
+  if (e.key === "ArrowRight") r.left += step / wrap.clientWidth;
+  if (e.key === "ArrowUp") r.top -= step / wrap.clientHeight;
+  if (e.key === "ArrowDown") r.top += step / wrap.clientHeight;
+  place(boxes[active]); schedule();
+});
+
+function schedule() {
+  clearTimeout(timer);
+  showStatus("Release for 1s to apply…");
+  timer = setTimeout(() => {
+    timer = null;
+    seq += 1; sentSeq = seq;
+    const rects = {};
+    for (const id in boxes) rects[id] = boxes[id].r;
+    showStatus("Updating…");
+    send("streamlit:setComponentValue", { value: { seq, rects }, dataType: "json" });
+  }, DEBOUNCE_MS);
+}
+
+function render(args) {
+  if (args.image !== imgSrc) { imgSrc = args.image; bg.src = imgSrc; }
+  // Python echoes back the last seq it applied; older renders must not undo a move.
+  if (args.seq > seq) seq = args.seq;
+  const stale = waiting() || args.seq < sentSeq;
+  if (!stale) showStatus("");
+
+  const ids = args.fields.map((f) => f.id);
+  for (const id in boxes) if (!ids.includes(id)) { boxes[id].el.remove(); delete boxes[id]; }
+  for (const f of args.fields) {
+    const b = boxes[f.id] || (boxes[f.id] = makeBox(f.id));
+    b.label.textContent = f.label;
+    if (b.sprite.getAttribute("src") !== f.sprite) b.sprite.src = f.sprite;
+    if (!stale || !b.placed) { b.r = { ...f.rect }; b.placed = true; }
+    place(b);
+  }
+  if (!active || !boxes[active]) active = args.fields.length ? args.fields[0].id : null;
+  markActive();
+  setHeight();
+}
+
+window.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "streamlit:render") render(e.data.args);
+});
+send("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>
