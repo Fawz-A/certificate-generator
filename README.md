@@ -23,7 +23,13 @@ Try it with the files in `sample/` (a template and 1000 test names).
 
 ## Deploy
 
-Deploy on [Streamlit Community Cloud](https://share.streamlit.io) with `app.py` as the main file. No secrets needed. On the cloud, files saved to `output/` are temporary, so use the ZIP download.
+Deploy on [Streamlit Community Cloud](https://share.streamlit.io) with `app.py` as the main file. On the cloud, files saved to `output/` are temporary, so use the ZIP download.
+
+To require a passkey, add this under the app's **Settings → Secrets** (leave it out for an open app):
+
+```toml
+APP_PASSWORD = "your-passkey"
+```
 
 ## Fonts
 

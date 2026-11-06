@@ -1,3 +1,4 @@
+import hmac
 import io
 import tempfile
 import time
@@ -10,6 +11,31 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 import certgen
 
 st.set_page_config(page_title="Certificate Generator", page_icon="🎓", layout="wide")
+
+
+def password_gate():
+    """Shared passkey, on when APP_PASSWORD is set in the host's secrets.
+
+    Locally there is no secrets file, so there is no gate.
+    """
+    try:
+        expected = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        expected = ""
+    if not expected or st.session_state.get("authed"):
+        return
+    st.title("🎓 Certificate Generator")
+    with st.form("gate"):
+        given = st.text_input("Passkey", type="password")
+        if st.form_submit_button("Enter"):
+            if hmac.compare_digest(given.encode(), str(expected).encode()):
+                st.session_state.authed = True
+                st.rerun()
+            st.error("Wrong passkey.")
+    st.stop()
+
+
+password_gate()
 st.title("🎓 Certificate Generator")
 st.caption("Names in, certificates out. Upload a list and a template, place the name once, generate them all.")
 
