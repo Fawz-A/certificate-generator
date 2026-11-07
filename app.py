@@ -145,10 +145,11 @@ template, dpi = cached_template(tpl_file.getvalue(), tpl_file.name, pdf_dpi)
 W, H = template.size
 st.caption(f"Template: {W} × {H} px")
 
-FIELDS = {"name": "Name", "desig": "Designation", "date": "Issue date", "ref": "Reference no."}
+FIELDS = {"name": "Name", "desig": "Designation", "inst": "Institution", "date": "Issue date", "ref": "Reference no."}
 DEFAULTS = {  # x, y, box width (%), font size (fraction of height), align
     "name": (50.0, 50.0, 60.0, 0.06, "center"),
     "desig": (50.0, 60.0, 50.0, 0.03, "center"),
+    "inst": (50.0, 66.0, 50.0, 0.03, "center"),
     "date": (80.0, 30.0, 18.0, 0.022, "left"),
     "ref": (90.0, 34.0, 10.0, 0.022, "left"),
 }
@@ -224,6 +225,38 @@ def style_controls(fid: str, fonts: dict, default_font: str) -> certgen.TextStyl
     )
 
 
+def column_field_controls(fid: str, what: str, finder, examples: str) -> dict:
+    """Checkbox + source (sheet column or static text) + First/Longest preview choice.
+    Returns {"on": bool, "values": one text per name, "sample": text for the editor}."""
+    on = st.checkbox(f"Add {what}", key=f"use_{fid}")
+    modes = (["From the sheet (column)"] if rows is not None else []) + ["Static (same on all)"]
+    if st.session_state.get(f"{fid}_mode") not in modes:
+        st.session_state[f"{fid}_mode"] = modes[0]
+    mode = st.radio("Type", modes, key=f"{fid}_mode", horizontal=True)
+    if mode.startswith("From the sheet"):
+        cols = [c for c in rows.columns if c != name_col]
+        found = finder(rows, exclude=name_col)
+        col = st.selectbox(f"Column with the {what}", cols, key=f"{fid}_col",
+                           index=cols.index(found) if found in cols else 0,
+                           help=f"Picked automatically from headings like {examples}.")
+        if found:
+            st.caption(f"Detected: **{found}**")
+        values = rows[col].tolist()
+        if values and not any(values):
+            st.warning("That column is empty.")
+    else:
+        if rows is None:
+            st.caption(f"Upload a sheet in step 1 to take the {what} from a column.")
+        text = st.text_input(f"{what[0].upper() + what[1:]} (the same on every certificate)", key=f"{fid}_static")
+        values = [text] * n_names
+    longest = max(range(len(values)), key=lambda i: len(values[i]), default=0)
+    pick = st.radio("Preview with", ["First", "Longest"], key=f"{fid}_sample", horizontal=True,
+                    format_func=lambda k: f"{k}: {(values[0] if k == 'First' else values[longest]) if values else '—'}",
+                    help="Use Longest to size the box so every entry fits.")
+    sample = (values[0] if pick == "First" else values[longest]) if values else ""
+    return {"on": on, "values": values, "sample": sample}
+
+
 # ---------------------------------------------------------------- 3. layout
 st.header("3 · Place the text")
 left, right = st.columns([1, 2.2], gap="large")
@@ -238,42 +271,22 @@ with left:
         p.write_bytes(custom.getvalue())
         fonts = {f"⭐ {Path(custom.name).stem}": str(p), **fonts}
 
-    tab_name, tab_desig, tab_date, tab_ref = st.tabs(list(FIELDS.values()))
+    tab_name, tab_desig, tab_inst, tab_date, tab_ref = st.tabs(list(FIELDS.values()))
     with tab_name:
         styles = {"name": style_controls("name", fonts, next(iter(fonts)))}
 
+    # Designation and Institution work the same way: per person from a sheet column, or static.
+    col_fields = {}
     with tab_desig:
-        use_desig = st.checkbox("Add a designation / portfolio", key="use_desig")
-        desig_modes = (["From the sheet (column)"] if rows is not None else []) + ["Static (same on all)"]
-        if st.session_state.get("desig_mode") not in desig_modes:
-            st.session_state.desig_mode = desig_modes[0]
-        desig_mode = st.radio("Type", desig_modes, key="desig_mode", horizontal=True)
-        desigs = []
-        if desig_mode.startswith("From the sheet"):
-            cols = [c for c in rows.columns if c != name_col]
-            found_d = certgen.find_designation_column(rows, exclude=name_col)
-            desig_col = st.selectbox(
-                "Column with the designation", cols, key="desig_col",
-                index=cols.index(found_d) if found_d in cols else 0,
-                help="Picked automatically from headings like Designation, Portfolio, Role, Position, Allotted Country.",
-            )
-            if found_d:
-                st.caption(f"Detected: **{found_d}**")
-            desigs = rows[desig_col].tolist()
-            if desigs and not any(desigs):
-                st.warning("That column is empty.")
-        else:
-            if rows is None:
-                st.caption("Upload a sheet in step 1 to take designations from a column.")
-            desig_static = st.text_input("Designation (the same on every certificate)", key="desig_static")
-            desigs = [desig_static] * n_names
-        desig_longest = max(range(len(desigs)), key=lambda i: len(desigs[i]), default=0)
-        desig_sample = st.radio(
-            "Preview with", ["First", "Longest"], key="desig_sample", horizontal=True,
-            format_func=lambda k: f"{k}: {(desigs[0] if k == 'First' else desigs[desig_longest]) if desigs else '—'}",
-            help="Use Longest to size the box so every designation fits.",
-        )
+        col_fields["desig"] = column_field_controls(
+            "desig", "designation / portfolio", certgen.find_designation_column,
+            "Designation, Portfolio, Role, Position, Allotted Country")
         styles["desig"] = style_controls("desig", fonts, "Lora")
+    with tab_inst:
+        col_fields["inst"] = column_field_controls(
+            "inst", "institution", certgen.find_institution_column,
+            "Institution, College, University, School, Organisation")
+        styles["inst"] = style_controls("inst", fonts, "Lora")
 
     with tab_date:
         use_date = st.checkbox("Add an issue date", key="use_date")
@@ -315,15 +328,17 @@ def ref_for(i: int) -> str:  # i = 0-based position in the list
     return ref_static
 
 
-def desig_for(i: int) -> str:
-    return desigs[i] if i < len(desigs) else ""
+def column_value(fid: str, i: int) -> str:
+    values = col_fields[fid]["values"]
+    return values[i] if i < len(values) else ""
 
 
 def items_for(i: int, name: str) -> dict:
     """field id -> (text, style) for certificate i, only the fields that are switched on."""
     items = {"name": (name, styles["name"])}
-    if use_desig:
-        items["desig"] = (desig_for(i), styles["desig"])
+    for fid, cf in col_fields.items():
+        if cf["on"]:
+            items[fid] = (column_value(fid, i), styles[fid])
     if use_date:
         items["date"] = (date_text, styles["date"])
     if use_ref:
@@ -342,9 +357,10 @@ with right:
                      format_func=lambda k: f"{labels[k]}: {names[samples[k]] if names else 'Your Name Here'}")
     idx = samples[which]
     items = items_for(idx, names[idx] if names else "Your Name Here")
-    if use_desig and desigs:
-        # Designation box shows the first or the longest one, as chosen in its tab.
-        items["desig"] = (desigs[0] if desig_sample == "First" else desigs[desig_longest], styles["desig"])
+    for fid, cf in col_fields.items():
+        # Designation / institution boxes show the first or the longest entry, as chosen in their tab.
+        if cf["on"]:
+            items[fid] = (cf["sample"], styles[fid])
     if dynamic_ref:
         # Show the last (longest) number so the box is sized for the widest one.
         sample_ref = ref_for(max(n_certs, 1) - 1)
@@ -401,8 +417,9 @@ if go:
 
     batch = names[:n_certs]
     extras = []
-    if use_desig:
-        extras.append((styles["desig"], [desig_for(i) for i in range(n_certs)]))
+    for fid, cf in col_fields.items():
+        if cf["on"]:
+            extras.append((styles[fid], [column_value(fid, i) for i in range(n_certs)]))
     if use_date:
         extras.append((styles["date"], [date_text] * n_certs))
     if use_ref:

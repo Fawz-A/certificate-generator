@@ -102,6 +102,18 @@ def find_designation_column(df, exclude: str | None = None) -> str | None:
     return None
 
 
+_INST_HEADER = re.compile(
+    r"institut|college|universit|school|organi[sz]ation|company|affiliation|employer|academy|campus", re.I)
+
+
+def find_institution_column(df, exclude: str | None = None) -> str | None:
+    """Pick the institution column by its heading (Institution, College, University ...)."""
+    for c in (str(c) for c in df.columns):
+        if c != exclude and _INST_HEADER.search(c):
+            return c
+    return None
+
+
 def read_pdf_table(data: bytes):
     """Read the table(s) in a PDF into a DataFrame. The first row is the header.
 
