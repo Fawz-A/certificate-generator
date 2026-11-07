@@ -73,6 +73,8 @@ def clean(values) -> list[str]:
 st.header("1 · Names")
 tab_file, tab_type = st.tabs(["Upload Excel / CSV / PDF", "Type names"])
 names: list[str] = []
+rows = None  # the sheet's rows that have a name, as text, so other columns line up with names
+name_col = None
 
 with tab_file:
     sheet = st.file_uploader("Excel (.xlsx), CSV, or a PDF with a table of names", type=["xlsx", "csv", "pdf"])
@@ -102,11 +104,14 @@ with tab_file:
                 "Column with the names", cols, index=cols.index(found) if found else 0,
                 help="Picked automatically from headings like Name, Full Name, Candidate Name, Participant Name.",
             )
+            name_col = col
             if found:
                 st.caption(f"Detected the name column: **{found}**")
             else:
                 st.warning("Couldn't spot a name column. Please choose it above.")
-            names = clean(df[col])
+            text = df.astype(object).where(df.notna(), "").map(lambda v: str(v).strip())
+            rows = text[text[col] != ""].reset_index(drop=True)
+            names = rows[col].tolist()
             odd = [n for n in names if not certgen.looks_like_name(n)]
             if odd:
                 with st.expander(f"⚠️ {len(odd)} entries don't look like names. Check them before generating"):
@@ -140,9 +145,10 @@ template, dpi = cached_template(tpl_file.getvalue(), tpl_file.name, pdf_dpi)
 W, H = template.size
 st.caption(f"Template: {W} × {H} px")
 
-FIELDS = {"name": "Name", "date": "Issue date", "ref": "Reference no."}
+FIELDS = {"name": "Name", "desig": "Designation", "date": "Issue date", "ref": "Reference no."}
 DEFAULTS = {  # x, y, box width (%), font size (fraction of height), align
     "name": (50.0, 50.0, 60.0, 0.06, "center"),
+    "desig": (50.0, 60.0, 50.0, 0.03, "center"),
     "date": (80.0, 30.0, 18.0, 0.022, "left"),
     "ref": (90.0, 34.0, 10.0, 0.022, "left"),
 }
@@ -232,9 +238,42 @@ with left:
         p.write_bytes(custom.getvalue())
         fonts = {f"⭐ {Path(custom.name).stem}": str(p), **fonts}
 
-    tab_name, tab_date, tab_ref = st.tabs(list(FIELDS.values()))
+    tab_name, tab_desig, tab_date, tab_ref = st.tabs(list(FIELDS.values()))
     with tab_name:
         styles = {"name": style_controls("name", fonts, next(iter(fonts)))}
+
+    with tab_desig:
+        use_desig = st.checkbox("Add a designation / portfolio", key="use_desig")
+        desig_modes = (["From the sheet (column)"] if rows is not None else []) + ["Static (same on all)"]
+        if st.session_state.get("desig_mode") not in desig_modes:
+            st.session_state.desig_mode = desig_modes[0]
+        desig_mode = st.radio("Type", desig_modes, key="desig_mode", horizontal=True)
+        desigs = []
+        if desig_mode.startswith("From the sheet"):
+            cols = [c for c in rows.columns if c != name_col]
+            found_d = certgen.find_designation_column(rows, exclude=name_col)
+            desig_col = st.selectbox(
+                "Column with the designation", cols, key="desig_col",
+                index=cols.index(found_d) if found_d in cols else 0,
+                help="Picked automatically from headings like Designation, Portfolio, Role, Position, Allotted Country.",
+            )
+            if found_d:
+                st.caption(f"Detected: **{found_d}**")
+            desigs = rows[desig_col].tolist()
+            if desigs and not any(desigs):
+                st.warning("That column is empty.")
+        else:
+            if rows is None:
+                st.caption("Upload a sheet in step 1 to take designations from a column.")
+            desig_static = st.text_input("Designation (the same on every certificate)", key="desig_static")
+            desigs = [desig_static] * n_names
+        desig_longest = max(range(len(desigs)), key=lambda i: len(desigs[i]), default=0)
+        desig_sample = st.radio(
+            "Preview with", ["First", "Longest"], key="desig_sample", horizontal=True,
+            format_func=lambda k: f"{k}: {(desigs[0] if k == 'First' else desigs[desig_longest]) if desigs else '—'}",
+            help="Use Longest to size the box so every designation fits.",
+        )
+        styles["desig"] = style_controls("desig", fonts, "Lora")
 
     with tab_date:
         use_date = st.checkbox("Add an issue date", key="use_date")
@@ -276,12 +315,19 @@ def ref_for(i: int) -> str:  # i = 0-based position in the list
     return ref_static
 
 
-def items_for(i: int, name: str):
-    items = [(name, styles["name"])]
+def desig_for(i: int) -> str:
+    return desigs[i] if i < len(desigs) else ""
+
+
+def items_for(i: int, name: str) -> dict:
+    """field id -> (text, style) for certificate i, only the fields that are switched on."""
+    items = {"name": (name, styles["name"])}
+    if use_desig:
+        items["desig"] = (desig_for(i), styles["desig"])
     if use_date:
-        items.append((date_text, styles["date"]))
+        items["date"] = (date_text, styles["date"])
     if use_ref:
-        items.append((ref_for(i), styles["ref"]))
+        items["ref"] = (ref_for(i), styles["ref"])
     return items
 
 
@@ -296,16 +342,18 @@ with right:
                      format_func=lambda k: f"{labels[k]}: {names[samples[k]] if names else 'Your Name Here'}")
     idx = samples[which]
     items = items_for(idx, names[idx] if names else "Your Name Here")
+    if use_desig and desigs:
+        # Designation box shows the first or the longest one, as chosen in its tab.
+        items["desig"] = (desigs[0] if desig_sample == "First" else desigs[desig_longest], styles["desig"])
     if dynamic_ref:
         # Show the last (longest) number so the box is sized for the widest one.
         sample_ref = ref_for(max(n_certs, 1) - 1)
-        items[-1] = (sample_ref, styles["ref"])
+        items["ref"] = (sample_ref, styles["ref"])
         st.caption(f"Reference box shows a sample number: **{sample_ref}** (the last one, so you can size for the widest).")
 
-    field_ids = ["name"] + (["date"] if use_date else []) + (["ref"] if use_ref else [])
     scale = min(1.0, PREVIEW_W / W)
     fields = []
-    for fid, (text, style) in zip(field_ids, items):
+    for fid, (text, style) in items.items():
         l, t, r, b = certgen.box_rect((W, H), style)
         fields.append({
             "id": fid, "label": FIELDS[fid],
@@ -353,6 +401,8 @@ if go:
 
     batch = names[:n_certs]
     extras = []
+    if use_desig:
+        extras.append((styles["desig"], [desig_for(i) for i in range(n_certs)]))
     if use_date:
         extras.append((styles["date"], [date_text] * n_certs))
     if use_ref:

@@ -83,6 +83,25 @@ def find_name_column(df) -> str | None:
     return best if best is not None and content_score(best) > 0.3 else None
 
 
+# Headings for what the person is/was on the certificate, strongest match first.
+_DESIG_HEADERS = [
+    re.compile(r"designation|portfolio", re.I),
+    re.compile(r"\b(position|role|post|title|rank|award)\b", re.I),
+    re.compile(r"allot|country|committee|department|dept\b|category|track", re.I),
+]
+
+
+def find_designation_column(df, exclude: str | None = None) -> str | None:
+    """Pick the designation/portfolio column by its heading (e.g. Designation,
+    Portfolio, Role, Position, Allotted Country), never the name column."""
+    cols = [str(c) for c in df.columns if str(c) != exclude]
+    for pattern in _DESIG_HEADERS:
+        for c in cols:
+            if pattern.search(c):
+                return c
+    return None
+
+
 def read_pdf_table(data: bytes):
     """Read the table(s) in a PDF into a DataFrame. The first row is the header.
 
